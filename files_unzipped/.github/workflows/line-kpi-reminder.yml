@@ -1,0 +1,57 @@
+# Meta 広報シート転記リマインダー（広告 KPI）— Claude 経由なし・LINE のみ・月額増ほぼゼロ
+# 有効化: GitHub → Settings → Variables → KPI_LINE_REMINDER_ENABLED = true
+# Secrets 必須: LINE_MESSAGING_API_TOKEN, LINE_USER_ID
+# 任意 Secret: LINE_PUSH_TEXT（無ければ npm スクリプトの既定文）
+# 時刻: JST 毎日 07:30 ≒ UTC 22:30（日次キュレーター 07:00 JST と内容が被らない）
+name: LINE KPI sheet reminder
+
+on:
+  schedule:
+    - cron: "30 22 * * *"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: files_unzipped
+
+jobs:
+  line-remind:
+    if: github.event_name == 'workflow_dispatch' || vars.KPI_LINE_REMINDER_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify layout
+        working-directory: ${{ github.workspace }}
+        run: test -d files_unzipped || (echo "ERROR: files_unzipped not at repo root" && exit 1)
+
+      - name: Preflight LINE secrets
+        working-directory: ${{ github.workspace }}
+        env:
+          LINE_MESSAGING_API_TOKEN: ${{ secrets.LINE_MESSAGING_API_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: |
+          if [ -z "$LINE_MESSAGING_API_TOKEN" ] || [ -z "$LINE_USER_ID" ]; then
+            echo "Missing LINE_MESSAGING_API_TOKEN or LINE_USER_ID GitHub Secrets"
+            exit 1
+          fi
+          echo "LINE preflight OK"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Send LINE reminder
+        env:
+          LINE_MESSAGING_API_TOKEN: ${{ secrets.LINE_MESSAGING_API_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          LINE_PUSH_TEXT: ${{ secrets.LINE_PUSH_TEXT }}
+        run: npm run line:push

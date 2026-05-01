@@ -1,0 +1,76 @@
+# 定時: Repo Variables → CURATOR_CRON_ENABLED=true（ローカルで npm run test:email 成功後）
+# JST 毎日 07:00 相当: UTC 22:00
+name: Daily AI Curator
+
+on:
+  schedule:
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: files_unzipped
+
+jobs:
+  curator:
+    if: github.event_name == 'workflow_dispatch' || vars.CURATOR_CRON_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify repo layout (root)
+        working-directory: ${{ github.workspace }}
+        run: |
+          ls -la
+          test -d files_unzipped || (echo "ERROR: files_unzipped folder not found at repo root" && exit 1)
+          ls -la files_unzipped
+
+      - name: Preflight secrets (values are hidden; only checks empty)
+        working-directory: ${{ github.workspace }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          LINE_MESSAGING_API_TOKEN: ${{ secrets.LINE_MESSAGING_API_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then echo "Missing GitHub Secret: ANTHROPIC_API_KEY"; exit 1; fi
+          if [ -z "$SUPABASE_URL" ]; then echo "Missing GitHub Secret: SUPABASE_URL"; exit 1; fi
+          if [ -z "$SUPABASE_KEY" ]; then echo "Missing GitHub Secret: SUPABASE_KEY"; exit 1; fi
+          if [ -z "$LINE_MESSAGING_API_TOKEN" ] || [ -z "$LINE_USER_ID" ]; then
+            echo "WARN: LINE secrets incomplete — LINE push skipped"
+          fi
+          # API の Project URL であること（リテラル "SUPABASE_URL" の誤登録を早期検出）
+          if ! echo "$SUPABASE_URL" | grep -qE '^https://[a-z0-9][a-z0-9-]*\.supabase\.co/?$'; then
+            echo "Invalid SUPABASE_URL: use https://<ref>.supabase.co from Project Settings → API (no quotes in value)"
+            exit 1
+          fi
+          echo "Preflight OK"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Run daily curator
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          LINE_MESSAGING_API_TOKEN: ${{ secrets.LINE_MESSAGING_API_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+          # 初回は thinking 無効 + 安定モデル（通ったら Secrets で上書き可）
+          ANTHROPIC_MODEL: "claude-3-5-sonnet-20241022"
+          ANTHROPIC_ENABLE_THINKING: "0"
+          NODE_OPTIONS: "--trace-uncaught"
+        run: node daily-ai-curator.js

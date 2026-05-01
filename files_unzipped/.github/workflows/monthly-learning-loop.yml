@@ -1,0 +1,72 @@
+# リポジトリルート配置。working-directory は daily と同じ files_unzipped/
+# 毎月1日 UTC 14:00（ローリング30日のため Render の月末 L と厳密一致は不要）
+name: Monthly AI Learning Loop
+
+on:
+  schedule:
+    - cron: "0 14 1 * *"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: files_unzipped
+
+jobs:
+  monthly-learning:
+    if: github.event_name == 'workflow_dispatch' || vars.CURATOR_CRON_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify repo layout (root)
+        working-directory: ${{ github.workspace }}
+        run: |
+          test -d files_unzipped || (echo "ERROR: files_unzipped not at repo root" && exit 1)
+
+      - name: Preflight secrets
+        working-directory: ${{ github.workspace }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          LINE_MESSAGING_API_TOKEN: ${{ secrets.LINE_MESSAGING_API_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then echo "Missing ANTHROPIC_API_KEY"; exit 1; fi
+          if [ -z "$SUPABASE_URL" ]; then echo "Missing SUPABASE_URL"; exit 1; fi
+          if [ -z "$SUPABASE_KEY" ]; then echo "Missing SUPABASE_KEY"; exit 1; fi
+          if [ -z "$LINE_MESSAGING_API_TOKEN" ] || [ -z "$LINE_USER_ID" ]; then
+            echo "WARN: LINE incomplete — LINE push skipped"
+          fi
+          if ! echo "$SUPABASE_URL" | grep -qE '^https://[a-z0-9][a-z0-9-]*\.supabase\.co/?$'; then
+            echo "Invalid SUPABASE_URL"
+            exit 1
+          fi
+          echo "Preflight OK (LINE optional at runtime)"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Run monthly learning
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          LINE_MESSAGING_API_TOKEN: ${{ secrets.LINE_MESSAGING_API_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+          ANTHROPIC_MODEL: "claude-3-5-sonnet-20241022"
+          ANTHROPIC_ENABLE_THINKING: "0"
+          NODE_OPTIONS: "--trace-uncaught"
+        run: node monthly-learning-loop.js
